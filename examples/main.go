@@ -3,9 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+
 	"github.com/eskpil/ideal"
 	"github.com/graphql-go/graphql"
-	"reflect"
 )
 
 type User struct {

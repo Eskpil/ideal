@@ -2,9 +2,10 @@ package ideal
 
 import (
 	"fmt"
-	"github.com/graphql-go/graphql"
 	"reflect"
 	"strings"
+
+	"github.com/graphql-go/graphql"
 )
 
 type Query struct {
@@ -58,6 +59,10 @@ func NewBuilder(resolvers ...Resolver) *Builder {
 	builder.inputCache = make(map[reflect.Type]graphql.FieldConfigArgument)
 
 	return builder
+}
+
+func (b *Builder) AddResolver(resolver Resolver) {
+	b.Resolvers = append(b.Resolvers, resolver)
 }
 
 func (s *Builder) introspectField(r reflect.Type) graphql.Type {
@@ -183,11 +188,20 @@ func (s *Builder) Build() (graphql.Schema, error) {
 
 	for _, resolver := range s.Resolvers {
 		for _, query := range resolver.Queries {
+			if query.Type == nil {
+				panic("query type must not be nil")
+			}
+
+			args := graphql.FieldConfigArgument{}
+			if query.Arguments != nil {
+				args = s.lookupArguments(query.Arguments)
+			}
+
 			field := graphql.Field{
 				Name: query.Name,
 
 				Type: s.lookupObject(query.Type),
-				Args: s.lookupArguments(query.Arguments),
+				Args: args,
 
 				Resolve: query.Resolve,
 
@@ -197,18 +211,45 @@ func (s *Builder) Build() (graphql.Schema, error) {
 
 			rootQueryFields[query.Name] = &field
 		}
+
+		for _, mutation := range resolver.Mutations {
+			if mutation.Type == nil {
+				panic("mutation type must not be nil")
+			}
+
+			args := graphql.FieldConfigArgument{}
+			if mutation.Arguments != nil {
+				args = s.lookupArguments(mutation.Arguments)
+			}
+
+			field := graphql.Field{
+				Name: mutation.Name,
+
+				Type: s.lookupObject(mutation.Type),
+				Args: args,
+
+				Resolve: mutation.Resolve,
+
+				Description:       mutation.Name,
+				DeprecationReason: mutation.DeprecationReason,
+			}
+
+			rootMutationFields[mutation.Name] = &field
+		}
 	}
 
 	if 0 >= len(rootMutationFields) {
-		return graphql.NewSchema(graphql.SchemaConfig{
+		schema, err := graphql.NewSchema(graphql.SchemaConfig{
 			Query: graphql.NewObject(graphql.ObjectConfig{
 				Name:   "RootQuery",
 				Fields: rootQueryFields,
 			}),
 		})
+
+		return schema, err
 	}
 
-	return graphql.NewSchema(graphql.SchemaConfig{
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{
 		Mutation: graphql.NewObject(graphql.ObjectConfig{
 			Name:   "RootMutation",
 			Fields: rootMutationFields,
@@ -218,5 +259,7 @@ func (s *Builder) Build() (graphql.Schema, error) {
 			Fields: rootQueryFields,
 		}),
 	})
+
+	return schema, err
 
 }
