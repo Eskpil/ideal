@@ -35,7 +35,7 @@ type Resolver struct {
 }
 
 type Builder struct {
-	Resolvers []*Resolver
+	Resolvers []Resolver
 
 	objectCache map[reflect.Type]*graphql.Object
 	inputCache  map[reflect.Type]graphql.FieldConfigArgument
@@ -49,7 +49,7 @@ func (r *Resolver) Query(query Query) {
 	r.Queries = append(r.Queries, query)
 }
 
-func NewBuilder(resolvers []*Resolver) *Builder {
+func NewBuilder(resolvers ...Resolver) *Builder {
 	builder := new(Builder)
 
 	builder.Resolvers = resolvers
