@@ -63,6 +63,7 @@ func main() {
 From this point you have a graphql schema like the one defined in 
 [graphql-go](https://github.com/graphql-go/graphql) on which you can execute graphql requests.
 
+
 ```go
 package example
 
