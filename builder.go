@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/graphql-go/graphql"
 )
@@ -95,6 +96,10 @@ func (s *Builder) introspectField(r reflect.Type) graphql.Type {
 		return graphql.NewList(s.introspectField(r.Elem()))
 
 	case reflect.Struct:
+		if r.String() == time.Time {
+			return graphql.DateTime
+		}
+
 		fields := s.introspect(r)
 		return graphql.NewObject(graphql.ObjectConfig{
 			Name:   r.Name(),
