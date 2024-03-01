@@ -29,13 +29,16 @@ You define your queries and mutations like this
 ```go
 package example
 
-import "github.com/eskpil/ideal"
+import (
+   "github.com/eskpil/ideal"
+   "reflect" 
+)
 
 var Hello = ideal.Query{
     Name: "hello",
     Type: reflect.TypeOf(User{})
 
-    Resolve: func(params graphql.ResolveParams) (interface{}, error) {
+    Resolve: func(c *ideal.Context) (interface{}, error) {
         return User{Name: "john", Email: "john@doe.com"}
     }
 
@@ -56,7 +59,8 @@ func main() {
 
 	builder := ideal.NewBuilder(resolver)
 	
-	schema, err := builder.Build()
+    runtime := ideal.NewRuntime()
+	schema, err := builder.Build(runtime)
 }
 ```
 
@@ -77,4 +81,6 @@ func main() {
 }
 ```
 
-For a look at the complete example, [read](./examples/main.go)
+Ideal also supports adding middleware to your resolvers.
+
+For a look at the complete examples, [see](./examples/)

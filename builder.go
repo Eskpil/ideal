@@ -2,19 +2,32 @@ package ideal
 
 import (
 	"fmt"
+	"github.com/graphql-go/graphql"
 	"reflect"
 	"strings"
-	"time"
-
-	"github.com/graphql-go/graphql"
 )
+
+type Field struct {
+	Name string
+
+	Middleware []MiddlewareFunc
+
+	Arguments reflect.Type
+	Type      reflect.Type
+	Resolve   ResolveFunc
+
+	Description       string
+	DeprecationReason string
+}
 
 type Query struct {
 	Name string
 
+	Middleware []MiddlewareFunc
+
 	Arguments reflect.Type
 	Type      reflect.Type
-	Resolve   graphql.FieldResolveFn
+	Resolve   ResolveFunc
 
 	Description       string
 	DeprecationReason string
@@ -23,17 +36,22 @@ type Query struct {
 type Mutation struct {
 	Name string
 
+	Middleware []MiddlewareFunc
+
 	Arguments reflect.Type
 	Type      reflect.Type
-	Resolve   graphql.FieldResolveFn
+	Resolve   ResolveFunc
 
 	Description       string
 	DeprecationReason string
 }
 
 type Resolver struct {
+	Type reflect.Type
+
 	Queries   []Query
 	Mutations []Mutation
+	Fields    []Field
 }
 
 type Builder struct {
@@ -66,7 +84,7 @@ func (b *Builder) AddResolver(resolver Resolver) {
 	b.Resolvers = append(b.Resolvers, resolver)
 }
 
-func (s *Builder) introspectField(r reflect.Type) graphql.Type {
+func (b *Builder) introspectField(r reflect.Type) graphql.Type {
 	switch r.Kind() {
 	case reflect.Bool:
 		return graphql.Boolean
@@ -90,22 +108,16 @@ func (s *Builder) introspectField(r reflect.Type) graphql.Type {
 
 	case reflect.Pointer:
 		// TODO: Optional of some kind? idk
-		return s.introspectField(r.Elem())
+		return b.introspectField(r.Elem())
 	case reflect.Array:
 	case reflect.Slice:
-		return graphql.NewList(s.introspectField(r.Elem()))
+		return graphql.NewList(b.introspectField(r.Elem()))
 
 	case reflect.Struct:
-		if r.String() == time.Time {
+		if r.String() == "time.Time" {
 			return graphql.DateTime
 		}
-
-		fields := s.introspect(r)
-		return graphql.NewObject(graphql.ObjectConfig{
-			Name:   r.Name(),
-			Fields: fields,
-		})
-
+		return b.introspect(r).(*graphql.Object)
 	case reflect.Complex64:
 	case reflect.Complex128:
 	case reflect.Chan:
@@ -119,14 +131,22 @@ func (s *Builder) introspectField(r reflect.Type) graphql.Type {
 	panic("unreachable")
 }
 
-func (s *Builder) introspect(of reflect.Type) graphql.Fields {
-	fields := graphql.Fields{}
-
+func (b *Builder) introspect(of reflect.Type) interface{} {
 	if of.Kind() == reflect.Struct {
+		if object, ok := b.objectCache[of]; ok {
+			return object
+		}
+
+		fields := graphql.Fields{}
+
 		for i := 0; i < of.NumField(); i++ {
 			r := of.Field(i)
 
 			tags := strings.Split(r.Tag.Get("gql"), ",")
+
+			if tags[0] == "-" {
+				continue
+			}
 
 			name := r.Name
 			if tags[0] != "" {
@@ -135,63 +155,84 @@ func (s *Builder) introspect(of reflect.Type) graphql.Fields {
 
 			field := graphql.Field{
 				Name: name,
-				Type: s.introspectField(r.Type),
+				Type: b.introspectField(r.Type),
 			}
 
 			fields[name] = &field
 		}
+
+		object := graphql.NewObject(graphql.ObjectConfig{
+			Name:   of.Name(),
+			Fields: fields,
+		})
+
+		b.objectCache[of] = object
+
+		return object
+	} else if of.Kind() == reflect.Array {
+		return graphql.NewList(b.introspect(of.Elem()).(*graphql.Object))
+	} else if of.Kind() == reflect.Slice {
+		return graphql.NewList(b.introspect(of.Elem()).(*graphql.Object))
 	} else {
-		panic("input must be a struct")
+		panic("input must be a struct, array or slice")
 	}
 
-	return fields
+	return nil
 }
 
-func (s *Builder) introspectObject(t reflect.Type) *graphql.Object {
-	object := graphql.NewObject(graphql.ObjectConfig{
-		Name:   t.Name(),
-		Fields: s.introspect(t),
-	})
-
-	return object
-}
-
-func (s *Builder) introspectInput(t reflect.Type) graphql.FieldConfigArgument {
+func (b *Builder) introspectInput(t reflect.Type) graphql.FieldConfigArgument {
 	config := graphql.FieldConfigArgument{}
-	fields := s.introspect(t)
+	obj := b.introspect(t).(*graphql.Object)
 
-	for key, value := range fields {
+	for key, value := range obj.Fields() {
 		config[key] = &graphql.ArgumentConfig{Type: value.Type}
 	}
 
 	return config
 }
 
-func (s *Builder) lookupObject(t reflect.Type) *graphql.Object {
-	object, ok := s.objectCache[t]
+func (b *Builder) lookupArguments(t reflect.Type) graphql.FieldConfigArgument {
+	input, ok := b.inputCache[t]
 	if !ok {
-		object = s.introspectObject(t)
-		s.objectCache[t] = object
-	}
-
-	return object
-}
-
-func (s *Builder) lookupArguments(t reflect.Type) graphql.FieldConfigArgument {
-	input, ok := s.inputCache[t]
-	if !ok {
-		input = s.introspectInput(t)
-		s.inputCache[t] = input
+		input = b.introspectInput(t)
+		b.inputCache[t] = input
 	}
 
 	return input
 }
 
-func (s *Builder) Build() (graphql.Schema, error) {
+func (b *Builder) Build(runtime *Runtime) (graphql.Schema, error) {
 	rootMutationFields := graphql.Fields{}
 	rootQueryFields := graphql.Fields{}
 
-	for _, resolver := range s.Resolvers {
+	for _, resolver := range b.Resolvers {
+		if resolver.Type != nil {
+			object := b.introspect(resolver.Type).(*graphql.Object)
+
+			for _, fieldResolver := range resolver.Fields {
+				args := graphql.FieldConfigArgument{}
+				if fieldResolver.Arguments != nil {
+					args = b.lookupArguments(fieldResolver.Arguments)
+				}
+
+				runtime.AddHandler(fieldResolver.Name, fieldResolver.Resolve, fieldResolver.Middleware...)
+
+				field := graphql.Field{
+					Name: fieldResolver.Name,
+
+					Type: b.introspect(fieldResolver.Type).(graphql.Output),
+					Args: args,
+
+					Resolve: runtime.Resolve,
+
+					Description:       fieldResolver.Name,
+					DeprecationReason: fieldResolver.DeprecationReason,
+				}
+
+				object.AddFieldConfig(fieldResolver.Name, &field)
+			}
+		}
+
 		for _, query := range resolver.Queries {
 			if query.Type == nil {
 				panic("query type must not be nil")
@@ -199,16 +240,18 @@ func (s *Builder) Build() (graphql.Schema, error) {
 
 			args := graphql.FieldConfigArgument{}
 			if query.Arguments != nil {
-				args = s.lookupArguments(query.Arguments)
+				args = b.lookupArguments(query.Arguments)
 			}
+
+			runtime.AddHandler(query.Name, query.Resolve, query.Middleware...)
 
 			field := graphql.Field{
 				Name: query.Name,
 
-				Type: s.lookupObject(query.Type),
+				Type: b.introspect(query.Type).(graphql.Output),
 				Args: args,
 
-				Resolve: query.Resolve,
+				Resolve: runtime.Resolve,
 
 				Description:       query.Name,
 				DeprecationReason: query.DeprecationReason,
@@ -224,16 +267,18 @@ func (s *Builder) Build() (graphql.Schema, error) {
 
 			args := graphql.FieldConfigArgument{}
 			if mutation.Arguments != nil {
-				args = s.lookupArguments(mutation.Arguments)
+				args = b.lookupArguments(mutation.Arguments)
 			}
+
+			runtime.AddHandler(mutation.Name, mutation.Resolve, mutation.Middleware...)
 
 			field := graphql.Field{
 				Name: mutation.Name,
 
-				Type: s.lookupObject(mutation.Type),
+				Type: b.introspect(mutation.Type).(*graphql.Object),
 				Args: args,
 
-				Resolve: mutation.Resolve,
+				Resolve: runtime.Resolve,
 
 				Description:       mutation.Name,
 				DeprecationReason: mutation.DeprecationReason,
