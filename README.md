@@ -36,13 +36,13 @@ import (
 
 var Hello = ideal.Query{
     Name: "hello",
-    Type: reflect.TypeOf(User{})
+    Type: reflect.TypeOf(User{}),
 
     Resolve: func(c *ideal.Context) (interface{}, error) {
         return User{Name: "john", Email: "john@doe.com"}
-    }
+    },
 
-    Description: "hello"
+    Description: "hello",
 }
 ```
 
@@ -59,7 +59,7 @@ func main() {
 
 	builder := ideal.NewBuilder(resolver)
 	
-    runtime := ideal.NewRuntime()
+    	runtime := ideal.NewRuntime()
 	schema, err := builder.Build(runtime)
 }
 ```
